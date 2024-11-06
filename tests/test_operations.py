@@ -1,4 +1,4 @@
-from app.operations import addition, multiplication, subtraction
+from app.operations import addition, division, multiplication, subtraction
 
 "addition test"
 def test_addition():
@@ -11,4 +11,8 @@ def test_subtraction():
 "multiplication test"
 def test_multiplication():
     assert multiplication(2,2) == 4
+    
+"division test"
+def test_division():
+    assert division(4,2) == 2
     

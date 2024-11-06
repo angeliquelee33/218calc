@@ -10,3 +10,7 @@ def subtraction(a: float, b: float) -> float:
 "multiplication operation"
 def multiplication(a: float, b: float) -> float:
     return a * b
+
+"division operation"
+def division(a: float, b: float) -> float:
+    return a / b
