@@ -1,3 +1,4 @@
+import pytest 
 from app.operations import addition, division, multiplication, subtraction
 
 "addition test"
@@ -12,7 +13,12 @@ def test_subtraction():
 def test_multiplication():
     assert multiplication(2,2) == 4
     
-"division test"
-def test_division():
+"division test positive"
+def test_division_positive():
     assert division(4,2) == 2
+
+"division test negative"
+def test_division_by_zero():
+    with pytest.raises(ZeroDivisionError):
+        division(1, 0)
     
