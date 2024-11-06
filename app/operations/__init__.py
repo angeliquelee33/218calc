@@ -6,3 +6,7 @@ def addition(a: float, b: float) -> float:
 "subtraction operation"
 def subtraction(a: float, b: float) -> float:
     return a - b
+
+"multiplication operation"
+def multiplication(a: float, b: float) -> float:
+    return a * b

@@ -1,4 +1,4 @@
-from app.operations import addition, subtraction
+from app.operations import addition, multiplication, subtraction
 
 "addition test"
 def test_addition():
@@ -8,4 +8,7 @@ def test_addition():
 def test_subtraction():
     assert subtraction(1,1) == 0
 
-
+"multiplication test"
+def test_multiplication():
+    assert multiplication(2,2) == 4
+    
