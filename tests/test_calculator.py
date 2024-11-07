@@ -5,7 +5,7 @@ from io import StringIO
 from app.calculator import calculator
 
 def run_calculator_with_input(monkeypatch, inputs):
-    #simulates user inputs. Monkeypatch allows you to test functionality without messing with the source code
+    #simulates user inputs. Monkeypatch allows you to test functionality without messing with the source code. 
     input_iterator = iter(inputs)
     monkeypatch.setattr('builtins.input', lambda _: next(input_iterator))
 
@@ -24,3 +24,10 @@ def test_addition(monkeypatch):
     inputs = ["add 2 3", "exit"]
     output = run_calculator_with_input(monkeypatch, inputs)
     assert "Result: 5.0" in output
+
+#REPL test for subtraction
+def test_subtraction(monkeypatch):
+    inputs = ["subtract 5 2", "exit"]
+    output = run_calculator_with_input(monkeypatch, inputs)
+    assert "Result: 3.0" in output
+
