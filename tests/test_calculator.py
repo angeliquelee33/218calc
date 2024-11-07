@@ -56,4 +56,10 @@ def test_invalid_input_format(monkeypatch):
     inputs = ["add two three", "exit"]
     output = run_calculator_with_input(monkeypatch, inputs)
     assert "Invalid input. Please follow the format" in output
+
+#REPL divide by 0 test
+def test_division_by_zero(monkeypatch):
+    inputs = ["divide 5 0", "exit"]
+    output = run_calculator_with_input(monkeypatch, inputs)
+    assert "Division by zero is not allowed" in output
     
