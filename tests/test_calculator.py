@@ -50,3 +50,10 @@ def test_invalid_operation(monkeypatch):
     inputs = ["modulus 5 3", "exit"]
     output = run_calculator_with_input(monkeypatch, inputs)
     assert "Unknown operation" in output
+
+#input format test (user inputs not put numerically)
+def test_invalid_input_format(monkeypatch):
+    inputs = ["add two three", "exit"]
+    output = run_calculator_with_input(monkeypatch, inputs)
+    assert "Invalid input. Please follow the format" in output
+    
