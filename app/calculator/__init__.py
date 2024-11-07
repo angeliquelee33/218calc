@@ -9,3 +9,7 @@ def calculator():
     # print welcome message upon program initialization 
     print("Welcome to the calculator REPL! Type 'exit' to quit")
  
+    while True: #this keeps the program running on a loop until told to exit
+         user_input = input #defined variable for user inputs(operation, numbers, exit)
+          
+        
