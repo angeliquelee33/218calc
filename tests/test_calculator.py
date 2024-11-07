@@ -36,4 +36,10 @@ def test_multiplication(monkeypatch):
     inputs = ["multiply 4 5", "exit"]
     output = run_calculator_with_input(monkeypatch, inputs)
     assert "Result: 20.0" in output
-    
+
+#REPL division test
+def test_division(monkeypatch):
+    inputs = ["divide 10 2", "exit"]
+    output = run_calculator_with_input(monkeypatch, inputs)
+    assert "Result: 5.0" in output
+
