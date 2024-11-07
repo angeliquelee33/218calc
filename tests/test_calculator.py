@@ -31,3 +31,9 @@ def test_subtraction(monkeypatch):
     output = run_calculator_with_input(monkeypatch, inputs)
     assert "Result: 3.0" in output
 
+#REPL multiplication test
+def test_multiplication(monkeypatch):
+    inputs = ["multiply 4 5", "exit"]
+    output = run_calculator_with_input(monkeypatch, inputs)
+    assert "Result: 20.0" in output
+    
