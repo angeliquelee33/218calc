@@ -1,187 +1,199 @@
-
-########################
-# Calculation Model    #
-########################
-
 from dataclasses import dataclass, field
 import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 import logging
-from typing import Any, Dict
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
-from app.exceptions import OperationError
+import pandas as pd
 
+from app.calculation import Calculation
+from app.calculator_config import CalculatorConfig
+from app.exceptions import OperationError, ValidationError
+from app.history import AutoSaveObserver, HistoryObserver, LoggingObserver
+from app.operations import Operation
+
+Number = Union[int, float, Decimal]
+CalculationResult = Union[Number, str]
 
 @dataclass
-class Calculation:
-    """Value Object representing a single calculation."""
-    
-    # Required fields
-    operation: str
-    operand1: Decimal
-    operand2: Decimal
-    
-    # Fields with default values
-    result: Decimal = field(init=False)
+class CalculatorMemento:
+    """Stores calculator state for undo/redo functionality."""
+    history: List[Calculation]
     timestamp: datetime.datetime = field(default_factory=datetime.datetime.now)
-    
-    def __post_init__(self):
-        """Calculate result after initialization."""
-        self.result = self.calculate()
-
-    def calculate(self) -> Decimal:
-        """Execute calculation using appropriate operation."""
-        operations = {
-            "Addition": lambda x, y: x + y,
-            "Subtraction": lambda x, y: x - y,
-            "Multiplication": lambda x, y: x * y,
-            "Division": lambda x, y: x / y if y != 0 else self._raise_div_zero(),
-            "Power": lambda x, y: Decimal(pow(float(x), float(y))) if y >= 0 else self._raise_neg_power(),
-            "Root": lambda x, y: (
-                Decimal(pow(float(x), 1/float(y))) 
-                if x >= 0 and y != 0 
-                else self._raise_invalid_root(x, y)
-            )
-        }
-        
-        op = operations.get(self.operation)
-        if not op:
-            raise OperationError(f"Unknown operation: {self.operation}")
-        
-        try:
-            return op(self.operand1, self.operand2)
-        except (InvalidOperation, ValueError, ArithmeticError) as e:
-            raise OperationError(f"Calculation failed: {str(e)}")
-
-    @staticmethod
-    def _raise_div_zero():
-        """Helper method to raise division by zero error."""
-        raise OperationError("Division by zero is not allowed")
-
-    @staticmethod
-    def _raise_neg_power():
-        """Helper method to raise negative power error."""
-        raise OperationError("Negative exponents are not supported")
-
-    @staticmethod
-    def _raise_invalid_root(x: Decimal, y: Decimal):
-        """Helper method to raise invalid root error."""
-        if y == 0:
-            raise OperationError("Zero root is undefined")
-        if x < 0:
-            raise OperationError("Cannot calculate root of negative number")
-        raise OperationError("Invalid root operation")
 
     def to_dict(self) -> Dict[str, Any]:
-        """
-        Convert calculation to dictionary for serialization.
-        
-        Returns:
-            Dict containing the calculation data in serializable format
-        """
+        """Convert memento to dictionary."""
         return {
-            'operation': self.operation,
-            'operand1': str(self.operand1),
-            'operand2': str(self.operand2),
-            'result': str(self.result),
+            'history': [calc.to_dict() for calc in self.history],
             'timestamp': self.timestamp.isoformat()
         }
 
-    @staticmethod
-    def from_dict(data: Dict[str, Any]) -> 'Calculation':
-        """
-        Create calculation from dictionary.
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'CalculatorMemento':
+        """Create memento from dictionary."""
+        return cls(
+            history=[Calculation.from_dict(calc) for calc in data['history']],
+            timestamp=datetime.datetime.fromisoformat(data['timestamp'])
+        )
+
+class Calculator:
+    """Main calculator class implementing multiple patterns."""
+
+    def __init__(self, config: Optional[CalculatorConfig] = None):
+        if config is None:
+            current_file = Path(__file__)
+            project_root = current_file.parent.parent
+            config = CalculatorConfig(base_dir=project_root)
+        self.config = config
+        self.config.validate()
         
-        Args:
-            data: Dictionary containing calculation data
-            
-        Returns:
-            New Calculation instance
-            
-        Raises:
-            OperationError: If data is invalid or missing required fields
-        """
+        os.makedirs(self.config.log_dir, exist_ok=True)
+        self._setup_logging()
+
+        self.history: List[Calculation] = []
+        self.operation_strategy: Optional[Operation] = None
+        self.observers: List[HistoryObserver] = []
+        self.undo_stack: List[CalculatorMemento] = []
+        self.redo_stack: List[CalculatorMemento] = []
+        
+        self._setup_directories()
+        
         try:
-            # Create the calculation object with the original operands
-            calc = Calculation(
-                operation=data['operation'],
-                operand1=Decimal(data['operand1']),
-                operand2=Decimal(data['operand2'])
+            self.load_history()
+        except Exception as e:
+            logging.warning(f"Could not load existing history: {e}")
+        
+        logging.info("Calculator initialized with configuration")
+
+    def _setup_logging(self) -> None:
+        try:
+            log_file = self.config.log_file.resolve()
+            logging.basicConfig(
+                filename=str(log_file),
+                level=logging.INFO,
+                format='%(asctime)s - %(levelname)s - %(message)s',
+                force=True
             )
-            
-            # Set the timestamp from the saved data
-            calc.timestamp = datetime.datetime.fromisoformat(data['timestamp'])
-            
-            # Verify the result matches (helps catch data corruption)
-            saved_result = Decimal(data['result'])
-            if calc.result != saved_result:
-                logging.warning(
-                    f"Loaded calculation result {saved_result} "
-                    f"differs from computed result {calc.result}"
-                )
-            
-            return calc
-            
-        except (KeyError, InvalidOperation, ValueError) as e:
-            raise OperationError(f"Invalid calculation data: {str(e)}")
+            logging.info("Logging initialized successfully.")
+        except Exception as e:
+            print(f"Error setting up logging: {e}")
+            raise
 
-    def __str__(self) -> str:
-        """
-        Return string representation of calculation.
-        
-        Returns:
-            Formatted string showing the calculation and result
-        """
-        return f"{self.operation}({self.operand1}, {self.operand2}) = {self.result}"
+    def _setup_directories(self) -> None:
+        self.config.history_dir.mkdir(parents=True, exist_ok=True)
 
-    def __repr__(self) -> str:
-        """
-        Return detailed string representation of calculation.
-        
-        Returns:
-            Detailed string showing all calculation attributes
-        """
-        return (
-            f"Calculation(operation='{self.operation}', "
-            f"operand1={self.operand1}, "
-            f"operand2={self.operand2}, "
-            f"result={self.result}, "
-            f"timestamp='{self.timestamp.isoformat()}')"
-        )
+    def add_observer(self, observer: HistoryObserver) -> None:
+        self.observers.append(observer)
+        logging.info(f"Added observer: {observer.__class__.__name__}")
 
-    def __eq__(self, other: object) -> bool:
-        """
-        Check if two calculations are equal.
-        
-        Args:
-            other: Another calculation to compare with
-            
-        Returns:
-            True if calculations are equal, False otherwise
-        """
-        if not isinstance(other, Calculation):
-            return NotImplemented
-        return (
-            self.operation == other.operation and
-            self.operand1 == other.operand1 and
-            self.operand2 == other.operand2 and
-            self.result == other.result
-        )
+    def remove_observer(self, observer: HistoryObserver) -> None:
+        self.observers.remove(observer)
+        logging.info(f"Removed observer: {observer.__class__.__name__}")
 
-    def format_result(self, precision: int = 10) -> str:
-        """
-        Format the calculation result with specified precision.
-        
-        Args:
-            precision: Number of decimal places to show
-            
-        Returns:
-            Formatted string representation of the result
-        """
+    def set_operation(self, operation: Operation) -> None:
+        self.operation_strategy = operation
+        logging.info(f"Set operation: {operation}")
+
+    def perform_operation(self, a: Number, b: Number) -> CalculationResult:
+        if not self.operation_strategy:
+            raise OperationError("No operation set")
+
         try:
-            # Remove trailing zeros and format to specified precision
-            return str(self.result.normalize().quantize(
-                Decimal('0.' + '0' * precision)
-            ).normalize())
-        except InvalidOperation:
-            return str(self.result)
+            a = float(a) if isinstance(a, (int, float, Decimal)) else a
+            b = float(b) if isinstance(b, (int, float, Decimal)) else b
+
+            result = self.operation_strategy.execute(a, b)
+            calculation = Calculation(
+                operation=str(self.operation_strategy),
+                operand1=a,
+                operand2=b,
+                result=result,
+                timestamp=datetime.datetime.now()
+            )
+            self.history.append(calculation)
+            self.notify_observers(calculation)
+            return result
+        except ValidationError as e:
+            logging.error(f"Validation error: {e}")
+            raise
+        except Exception as e:
+            logging.error(f"Operation failed: {e}")
+            raise OperationError(f"Operation failed: {e}")
+
+    def undo(self) -> bool:
+        if not self.undo_stack:
+            return False
+        memento = self.undo_stack.pop()
+        self.redo_stack.append(CalculatorMemento(self.history.copy()))
+        self.history = memento.history.copy()
+        return True
+
+    def redo(self) -> bool:
+        if not self.redo_stack:
+            return False
+        memento = self.redo_stack.pop()
+        self.undo_stack.append(CalculatorMemento(self.history.copy()))
+        self.history = memento.history.copy()
+        return True
+
+    def save_history(self) -> None:
+        try:
+            self.config.history_dir.mkdir(parents=True, exist_ok=True)
+            history_data = [
+                {
+                    'operation': calc.operation,
+                    'operand1': calc.operand1,
+                    'operand2': calc.operand2,
+                    'result': calc.result,
+                    'timestamp': calc.timestamp.isoformat(),
+                }
+                for calc in self.history
+            ]
+            pd.DataFrame(history_data).to_csv(self.config.history_file, index=False)
+            logging.info("History saved successfully.")
+        except Exception as e:
+            logging.error(f"Failed to save history: {e}")
+            raise OperationError(f"Failed to save history: {e}")
+
+    def load_history(self) -> None:
+        try:
+            if self.config.history_file.exists():
+                df = pd.read_csv(self.config.history_file)
+                self.history = [
+                    Calculation.from_dict(row)
+                    for row in df.to_dict(orient="records")
+                ]
+                logging.info("History loaded successfully.")
+            else:
+                logging.info("No history file found.")
+        except Exception as e:
+            logging.error(f"Failed to load history: {e}")
+            raise OperationError(f"Failed to load history: {e}")
+
+    def clear_history(self) -> None:
+        self.history.clear()
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        logging.info("History cleared")
+
+    def notify_observers(self, calculation: Calculation) -> None:
+        for observer in self.observers:
+            observer.update(calculation)
+
+def calculator_repl():
+    calc = Calculator()
+    calc.add_observer(LoggingObserver())
+    print("Calculator REPL started. Type 'help' for commands.")
+    while True:
+        command = input("\nEnter command: ").strip().lower()
+        if command == 'exit':
+            calc.save_history()
+            print("History saved successfully.")
+            print("Exiting calculator REPL.")
+            break
+        elif command == 'help':
+            print("\nAvailable commands: add, subtract, multiply, divide, exit")
+        else:
+            print(f"Executing command: {command}")
