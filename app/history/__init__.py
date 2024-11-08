@@ -1,38 +1,46 @@
-class History:
-    """
-    Class to manage the history of calculations.
-    """
-    def __init__(self):
-        # Initialize an empty list to store calculations.
-        self.calculations = []
+from abc import ABC, abstractmethod
+import logging
+from typing import Any
+from app.calculation import Calculation
 
-    def add_calculation(self, calculation: str):
+class HistoryObserver(ABC):
+    """Abstract base class for calculator observers."""
+    
+    @abstractmethod
+    def update(self, calculation: Calculation) -> None:
         """
-        Adds a calculation to the history.
-        :param calculation: String representation of the calculation.
+        Handle new calculation event.
+        
+        Args:
+            calculation: The calculation that was performed
         """
-        if not isinstance(calculation, str):
-            raise TypeError("Calculation must be a string.")
-        self.calculations.append(calculation)
+        pass
 
-    def clear_history(self):
-        """
-        Clears all calculations from the history.
-        """
-        self.calculations.clear()
+class LoggingObserver(HistoryObserver):
+    """Observer that logs calculations to file."""
+    
+    def update(self, calculation: Calculation) -> None:
+        """Log calculation details."""
+        if calculation is None:
+            raise AttributeError("Calculation cannot be None")
+        logging.info(
+            f"Calculation performed: {calculation.operation} "
+            f"({calculation.operand1}, {calculation.operand2}) = "
+            f"{calculation.result}"
+        )
 
-    def undo_last(self):
-        """
-        Removes the last calculation from the history.
-        """
-        if self.calculations:
-            self.calculations.pop()
-        else:
-            print("History is already empty.")
+class AutoSaveObserver(HistoryObserver):
+    """Observer that automatically saves calculations."""
+    
+    def __init__(self, calculator: Any):
+        if not hasattr(calculator, 'config') or not hasattr(calculator, 'save_history'):
+            raise TypeError("Calculator must have 'config' and 'save_history' attributes")
+        self.calculator = calculator
 
-    def get_history(self):
-        """
-        Retrieves a copy of the list of calculations.
-        :return: List of calculations.
-        """
-        return self.calculations.copy()  # Ensures a copy is returned to prevent external modifications
+    def update(self, calculation: Calculation) -> None:
+        """Trigger auto-save."""
+        if calculation is None:
+            raise AttributeError("Calculation cannot be None")
+        if self.calculator.config.auto_save:
+            self.calculator.save_history()
+            logging.info("History auto-saved")

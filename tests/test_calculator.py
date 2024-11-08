@@ -1,223 +1,182 @@
-""" tests/test_calculator.py """
-import math
-import sys
-from io import StringIO
-from app.calculator import calculator
+import datetime
+from pathlib import Path
+import pandas as pd
+import pytest
+from unittest.mock import Mock, patch, PropertyMock
+from decimal import Decimal
+from tempfile import TemporaryDirectory
+from app.calculator import Calculator, calculator_repl
+from app.calculator_config import CalculatorConfig
+from app.exceptions import OperationError, ValidationError
+from app.history import LoggingObserver, AutoSaveObserver
+from app.input_validators import InputValidator
+from app.operations import OperationFactory
+from app.calculation import Calculation
+from app.calculator import CalculatorMemento
 
+# Fixture to initialize Calculator with a temporary directory for file paths
+@pytest.fixture
+def calculator():
+    with TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        config = CalculatorConfig(base_dir=temp_path)
 
-# Helper function to capture print statements
-def run_calculator_with_input(monkeypatch, inputs):
-    """
-    Simulates user input and captures output from the calculator REPL.
+        # Patch properties to use the temporary directory paths
+        with patch.object(CalculatorConfig, 'log_dir', new_callable=PropertyMock) as mock_log_dir, \
+             patch.object(CalculatorConfig, 'log_file', new_callable=PropertyMock) as mock_log_file, \
+             patch.object(CalculatorConfig, 'history_dir', new_callable=PropertyMock) as mock_history_dir, \
+             patch.object(CalculatorConfig, 'history_file', new_callable=PropertyMock) as mock_history_file:
+            
+            # Set return values to use paths within the temporary directory
+            mock_log_dir.return_value = temp_path / "logs"
+            mock_log_file.return_value = temp_path / "logs/calculator.log"
+            mock_history_dir.return_value = temp_path / "history"
+            mock_history_file.return_value = temp_path / "history/calculator_history.csv"
+            
+            # Return an instance of Calculator with the mocked config
+            yield Calculator(config=config)
 
-    :param monkeypatch: pytest fixture to simulate user input
-    :param inputs: list of inputs to simulate
-    :return: captured output as a string
-    """
-    input_iterator = iter(inputs)
-    monkeypatch.setattr('builtins.input', lambda _: next(input_iterator))
+# Test Calculator Initialization
 
-    # Capture the output of the calculator
-    captured_output = StringIO()
-    sys.stdout = captured_output
-    calculator()
-    sys.stdout = sys.__stdout__  # Reset stdout
-    return captured_output.getvalue()
+def test_calculator_initialization(calculator):
+    assert calculator.history == []
+    assert calculator.undo_stack == []
+    assert calculator.redo_stack == []
+    assert calculator.operation_strategy is None
 
+# Test Logging Setup
 
-# Positive Tests
-def test_addition(monkeypatch):
-    """Test addition operation in REPL."""
-    inputs = ["add 2 3", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: 5.0" in output
+@patch('app.calculator.logging.info')
+def test_logging_setup(logging_info_mock):
+    with patch.object(CalculatorConfig, 'log_dir', new_callable=PropertyMock) as mock_log_dir, \
+         patch.object(CalculatorConfig, 'log_file', new_callable=PropertyMock) as mock_log_file:
+        mock_log_dir.return_value = Path('/tmp/logs')
+        mock_log_file.return_value = Path('/tmp/logs/calculator.log')
+        
+        # Instantiate calculator to trigger logging
+        calculator = Calculator(CalculatorConfig())
+        logging_info_mock.assert_any_call("Calculator initialized with configuration")
 
+# Test Adding and Removing Observers
 
-def test_subtraction(monkeypatch):
-    """Test subtraction operation in REPL."""
-    inputs = ["subtract 5 2", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: 3.0" in output
+def test_add_observer(calculator):
+    observer = LoggingObserver()
+    calculator.add_observer(observer)
+    assert observer in calculator.observers
 
+def test_remove_observer(calculator):
+    observer = LoggingObserver()
+    calculator.add_observer(observer)
+    calculator.remove_observer(observer)
+    assert observer not in calculator.observers
 
-def test_multiplication(monkeypatch):
-    """Test multiplication operation in REPL."""
-    inputs = ["multiply 4 5", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: 20.0" in output
+# Test Setting Operations
 
+def test_set_operation(calculator):
+    operation = OperationFactory.create_operation('add')
+    calculator.set_operation(operation)
+    assert calculator.operation_strategy == operation
 
-def test_division(monkeypatch):
-    """Test division operation in REPL."""
-    inputs = ["divide 10 2", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: 5.0" in output
+# Test Performing Operations
 
+def test_perform_operation_addition(calculator):
+    operation = OperationFactory.create_operation('add')
+    calculator.set_operation(operation)
+    result = calculator.perform_operation(2, 3)
+    assert result == Decimal('5')
 
-def test_negative_numbers(monkeypatch):
-    """Test operations with negative numbers."""
-    inputs = ["add -2 3", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: 1.0" in output
+def test_perform_operation_validation_error(calculator):
+    calculator.set_operation(OperationFactory.create_operation('add'))
+    with pytest.raises(ValidationError):
+        calculator.perform_operation('invalid', 3)
 
-    inputs = ["subtract -5 -2", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: -3.0" in output
+def test_perform_operation_operation_error(calculator):
+    with pytest.raises(OperationError, match="No operation set"):
+        calculator.perform_operation(2, 3)
 
-    inputs = ["multiply -4 5", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: -20.0" in output
+# Test Undo/Redo Functionality
 
-    inputs = ["divide -10 -2", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: 5.0" in output
+def test_undo(calculator):
+    operation = OperationFactory.create_operation('add')
+    calculator.set_operation(operation)
+    calculator.perform_operation(2, 3)
+    calculator.undo()
+    assert calculator.history == []
 
+def test_redo(calculator):
+    operation = OperationFactory.create_operation('add')
+    calculator.set_operation(operation)
+    calculator.perform_operation(2, 3)
+    calculator.undo()
+    calculator.redo()
+    assert len(calculator.history) == 1
 
-def test_floating_point_numbers(monkeypatch):
-    """Test operations with floating point numbers."""
-    # Test addition
-    inputs = ["add 2.5 3.1", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: 5.6" in output
+# Test History Management
 
-    # Test subtraction
-    inputs = ["subtract 5.5 2.2", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: 3.3" in output
+@patch('app.calculator.pd.DataFrame.to_csv')
+def test_save_history(mock_to_csv, calculator):
+    operation = OperationFactory.create_operation('add')
+    calculator.set_operation(operation)
+    calculator.perform_operation(2, 3)
+    calculator.save_history()
+    mock_to_csv.assert_called_once()
 
-    # Test multiplication
-    inputs = ["multiply 4.2 5.1", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
+@patch('app.calculator.pd.read_csv')
+@patch('app.calculator.Path.exists', return_value=True)
+def test_load_history(mock_exists, mock_read_csv, calculator):
+    # Mock CSV data to match the expected format in from_dict
+    mock_read_csv.return_value = pd.DataFrame({
+        'operation': ['Addition'],
+        'operand1': ['2'],
+        'operand2': ['3'],
+        'result': ['5'],
+        'timestamp': [datetime.datetime.now().isoformat()]
+    })
+    
+    # Test the load_history functionality
+    try:
+        calculator.load_history()
+        # Verify history length after loading
+        assert len(calculator.history) == 1
+        # Verify the loaded values
+        assert calculator.history[0].operation == "Addition"
+        assert calculator.history[0].operand1 == Decimal("2")
+        assert calculator.history[0].operand2 == Decimal("3")
+        assert calculator.history[0].result == Decimal("5")
+    except OperationError:
+        pytest.fail("Loading history failed due to OperationError")
+        
+            
+# Test Clearing History
 
-    # Extract the result from the output
-    result_line = next((line for line in output.split('\n') if "Result:" in line), None)
-    assert result_line is not None, "Result not found in output"
+def test_clear_history(calculator):
+    operation = OperationFactory.create_operation('add')
+    calculator.set_operation(operation)
+    calculator.perform_operation(2, 3)
+    calculator.clear_history()
+    assert calculator.history == []
+    assert calculator.undo_stack == []
+    assert calculator.redo_stack == []
 
-    # Parse the result value
-    actual_result = float(result_line.split("Result: ")[1])
-    expected_result = 21.42
+# Test REPL Commands (using patches for input/output handling)
 
-    # Use math.isclose to compare floating-point numbers
-    assert math.isclose(actual_result, expected_result, rel_tol=1e-5), f"Expected {expected_result}, got {actual_result}"
+@patch('builtins.input', side_effect=['exit'])
+@patch('builtins.print')
+def test_calculator_repl_exit(mock_print, mock_input):
+    with patch('app.calculator.Calculator.save_history') as mock_save_history:
+        calculator_repl()
+        mock_save_history.assert_called_once()
+        mock_print.assert_any_call("History saved successfully.")
+        mock_print.assert_any_call("Goodbye!")
 
+@patch('builtins.input', side_effect=['help', 'exit'])
+@patch('builtins.print')
+def test_calculator_repl_help(mock_print, mock_input):
+    calculator_repl()
+    mock_print.assert_any_call("\nAvailable commands:")
 
-
-def test_history_command(monkeypatch):
-    """Test the 'history' command with existing history."""
-    inputs = ["add 2 3", "history", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: 5.0" in output
-    assert "Calculation History:" in output
-    assert "add 2.0 3.0 = 5.0" in output
-
-
-def test_history_command_no_history(monkeypatch):
-    """Test the 'history' command when there is no history."""
-    inputs = ["history", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Calculation History:" in output
-    # Since history is empty, there should be no calculations listed
-
-
-def test_clear_history(monkeypatch):
-    """Test the 'clear' command."""
-    inputs = ["add 2 3", "clear", "history", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "History cleared." in output
-    assert "Calculation History:" in output
-    # Ensure that history is empty after clearing
-    assert "add 2.0 3.0 = 5.0" not in output
-
-
-def test_undo_command(monkeypatch):
-    """Test the 'undo' command."""
-    inputs = ["add 2 3", "subtract 5 1", "undo", "history", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Last calculation undone." in output
-    assert "subtract 5.0 1.0 = 4.0" not in output
-    assert "add 2.0 3.0 = 5.0" in output
-
-
-def test_undo_command_empty_history(monkeypatch):
-    """Test 'undo' command when history is empty."""
-    inputs = ["undo", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "History is already empty." in output
-
-
-def test_exit_case_insensitivity(monkeypatch):
-    """Test 'exit' command in different cases."""
-    inputs = ["EXIT"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Exiting calculator..." in output
-
-    inputs = ["eXiT"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Exiting calculator..." in output
-
-
-def test_incomplete_input(monkeypatch):
-    """Test incomplete input handling."""
-    inputs = ["add 2", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Invalid input. Please follow the format" in output
-
-
-def test_extra_input(monkeypatch):
-    """Test handling of extra arguments in input."""
-    inputs = ["add 2 3 4", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Invalid input. Please follow the format" in output
-
-
-def test_invalid_numbers(monkeypatch):
-    """Test handling of invalid number inputs."""
-    inputs = ["add two three", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Invalid input. Please follow the format" in output
-
-
-def test_sequence_of_operations(monkeypatch):
-    """Test multiple calculations and history display."""
-    inputs = ["add 2 3", "multiply 5 2", "history", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: 5.0" in output
-    assert "Result: 10.0" in output
-    assert "add 2.0 3.0 = 5.0" in output
-    assert "multiply 5.0 2.0 = 10.0" in output
-
-
-def test_clear_history_empty(monkeypatch):
-    """Test 'clear' command when history is already empty."""
-    inputs = ["clear", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "History cleared." in output
-    # No errors should occur when clearing an empty history
-
-
-def test_unknown_command(monkeypatch):
-    """Test handling of unknown commands."""
-    inputs = ["unknown_command", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Invalid input. Please follow the format" in output or "Unknown operation" in output
-
-
-def test_division_result_precision(monkeypatch):
-    """Test division result for precision."""
-    inputs = ["divide 1 3", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Result: 0.3333333333333333" in output
-
-
-def test_invalid_command_similar_to_valid(monkeypatch):
-    """Test invalid command similar to a valid one."""
-    inputs = ["ad 2 3", "exit"]  # Typo in 'add'
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Unknown operation 'ad'" in output
-
-
-def test_divide_by_zero(monkeypatch):
-    """Test division by zero error handling."""
-    inputs = ["divide 10 0", "exit"]
-    output = run_calculator_with_input(monkeypatch, inputs)
-    assert "Division by zero is not allowed." in output
+@patch('builtins.input', side_effect=['add', '2', '3', 'exit'])
+@patch('builtins.print')
+def test_calculator_repl_addition(mock_print, mock_input):
+    calculator_repl()
+    mock_print.assert_any_call("\nResult: 5")
