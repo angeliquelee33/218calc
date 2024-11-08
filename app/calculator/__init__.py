@@ -3,6 +3,8 @@
 "first integrate functions from opertions"
 from app.operations import addition, subtraction, multiplication, division 
 
+from app.history import History
+
 def calculator():
     """Basic REPL calculator that performs addition, subtraction, multiplication, and division."""
     
