@@ -1,5 +1,3 @@
-# app/history/__init__.py
-
 class History:
     """
     Class to manage the history of calculations.
@@ -37,4 +35,4 @@ class History:
         Retrieves a copy of the list of calculations.
         :return: List of calculations.
         """
-        return self.calculations.copy()
+        return self.calculations.copy()  # Ensures a copy is returned to prevent external modifications
